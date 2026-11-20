@@ -170,14 +170,86 @@ for each public company. Grading uses a private set of about 20 unseen
 companies with the same tools and the same answer key rules, but different
 names and wording, and scores your 3 points only.
 
-## Homework 3 solution:
-> to students: this is your report, see the homework description.
+## Homework 3 solution
 
 ### My 3 points and rules
-> for each point: why you chose it, your PASS rule in one or two sentences, and the evidence it uses. Quote Fisher where it helps.
+
+I selected points **4, 7 and 11** because they assess three complementary sources of business quality: the sales organization, employee relations and competitive positioning. They also suit Fisher's approach of seeking evidence from people who deal with a business. The assignment identifies interviews as the relevant evidence for all three points, allowing a focused research plan within the interview budget.
+
+| Point | Why I chose it | PASS / FAIL rule | Evidence used |
+| --- | --- | --- | --- |
+| 4 - Above-average sales organization | Customers can observe whether sales staff understand their operations and provide useful support. This helps assess the quality of the commercial organization. | PASS when the interview supports an above-average sales organization with knowledgeable, effective and responsive staff. FAIL when sales capability is weak or below competitors. | `interview(role="customer", topic="sales_team")` |
+| 7 - Labour and personnel relations | Employee relations provide a perspective on organizational quality beyond management's own claims. | PASS when the evidence supports outstanding personnel relations through fair treatment, trust and positive working conditions. FAIL when it indicates poor treatment, serious dissatisfaction or unhealthy relations. | `interview(role="current_employee", topic="working_conditions")` |
+| 11 - Industry-specific competitive advantage | Competitive positioning helps distinguish a business with defensible strengths from one whose products can be readily copied. | PASS when the interview supports a meaningful, defensible industry-specific advantage. FAIL when that advantage is absent, easily copied or undermined by the evidence. | `interview(role="competitor", topic="competitive_edge")` |
+
+These are qualitative decision rules implemented in the model prompt. The model must base its verdicts on the interview evidence and attend to negative statements, rather than infer favourable answers from company names or general knowledge. This is a focused operational interpretation of the selected Fisher points, rather than a complete investment assessment.
 
 ### Design
-> a visualization of your agent design and one paragraph describing it.
+
+```mermaid
+flowchart TD
+    A[Runner discovers company folders] --> B[Build LangChain ChatDeepSeek model]
+    B --> C[Analyze each company: at most 3 concurrently]
+    C --> D[Customer interview: sales_team / point 4]
+    C --> E[Employee interview: working_conditions / point 7]
+    C --> F[Competitor interview: competitive_edge / point 11]
+    D --> G[Combine evidence with explicit PASS and FAIL rules]
+    E --> G
+    F --> G
+    G --> H[One DeepSeek call for 3 verdicts and a summary]
+    H --> I[Parse JSON and validate all verdicts and summary]
+    I --> J[Return analysis dictionary]
+    I --> K[On error: return company entry with error summary]
+    K --> J
+    J --> L[Provided scorer compares labels with public answers]
+    L --> M[Write results.csv and print balanced accuracy]
+```
+
+The design uses a fixed research plan: route each selected point to a knowledgeable interview source, collect three answers, and send them together to `deepseek-v4-flash` through LangChain. The model is created once with `temperature=0`; it is reused for one model invocation per company. An `asyncio.Semaphore(3)` limits concurrent company analyses, while `asyncio.gather` collects results. Interviews are called synchronously inside each company task; the concurrent work primarily overlaps model requests. This is a programmed tool workflow with model-based evaluation, rather than an autonomous loop in which the model chooses its own tools. JSON parsing verifies the three labels and a non-empty summary. Exceptions are caught per company, allowing other companies to finish; the failed company's missing labels are counted as wrong by the scorer.
+
+The implementation uses **3 of the 10 allowed interviews per company**. According to the assignment, knowledgeable respondents agree with each other, so one relevant source per topic is sufficient for this dataset. Documents and SQL are available but are not needed for these selected points. The student analysis reads company evidence only through the supplied interview tool. Standard answers are read later by the provided scorer, after the analyses have been returned. No public labels or company-specific answers are embedded in the student implementation. The provided tools, runner and scoring code remain unchanged.
 
 ### Results
-> your point score on `public_test`, the companies where your verdicts disagree with the public answers, and why.
+
+The saved public-test run processed **20 companies** and produced `results.csv` with **60/60 correct verdicts** and **100.0% balanced accuracy**. The saved results were checked against `public_test/ground_truth.json`:
+
+| Point | Correct standard-PASS cases | Correct standard-FAIL cases | Total correct | Balanced accuracy |
+| --- | --- | --- | --- | --- |
+| 4 | 14/14 | 6/6 | 20/20 | 100.0% |
+| 7 | 14/14 | 6/6 | 20/20 | 100.0% |
+| 11 | 14/14 | 6/6 | 20/20 | 100.0% |
+| All selected points | 42/42 | 18/18 | 60/60 | 100.0% |
+
+Balanced accuracy is `(correct PASS / actual PASS + correct FAIL / actual FAIL) / 2`, pooling the selected company-point decisions. Here it is `(42/42 + 18/18) / 2 = 100%`. All 20 company rows show `3/3` correct, have no point errors, and record three interviews. Total interview use was **60**. There are **no companies with disagreements** in this saved run, so there are no observed classification errors to explain. No analysis-error summaries were found.
+
+This result describes one successful public-test run, not a three-run average or a private-test result. It supports the suitability of the chosen rules on the public data but does not guarantee the same performance on unseen wording. Relevant limitations are reliance on one source per topic, model interpretation of negation and nuance, and the lack of an explicit retry policy in the student code for malformed outputs. Temperature zero reduces sampling variability but does not guarantee identical responses. In less controlled data, contradictory or incomplete interviews would require additional evidence rather than confidence based on this public score alone.
+
+### Reproducing the run
+
+From the repository root, with Python 3.10 or newer:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Create a local `.env` containing `DEEPSEEK_API_KEY` with your own key, then run:
+
+```bash
+python hw3.py --data-folder public_test
+```
+
+The runner writes `results.csv` and prints the point score. Keep `.env` and `.venv` out of the submission. The existing requirements already cover this implementation; no additional package is needed. A fresh environment and end-to-end API run should be checked before submission. The reported 100.0% is from the saved run, not a newly repeated run during report preparation.
+
+### Task 2: Reflection on AI sycophancy and AI psychosis
+
+AI sycophancy raises an important question for an assistant: should it make a user feel agreed with, or help the user reach a better-supported conclusion? I think useful assistance requires the second goal. If a user proposes that a company is excellent, an assistant should still examine evidence against that claim. A fluent explanation is not a substitute for independent support.
+
+For this reflection, I use “AI psychosis” as an informal label for concerns about interactions that reinforce unsupported beliefs, not as a diagnosis or a claim that AI causes a particular disorder. The design problem I want to consider is a feedback loop: a user expresses a belief, the assistant validates it without sufficient evidence, and the user treats that validation as new confirmation. Further conversation may then build on an assumption that was never established. An assistant can acknowledge a person's feelings without endorsing the factual claim behind them.
+
+The homework illustrates why separating evidence, judgment and evaluation matters. The model receives interview evidence and explicit criteria; the supplied scorer subsequently compares the model's labels with independently supplied public answers. If I asked the model to praise its own solution and treated that praise as validation, I would have no independent check. Even the observed 100% public score has a limited meaning: it shows agreement on this dataset, not universal reliability or proof that the system understands every business situation.
+
+My preferred design would make the basis for each judgment visible, invite consideration of counterevidence, and communicate uncertainty when the evidence is incomplete. In a financial application, I would avoid presenting a model's reassuring tone as a reason to invest. For conversations about troubling beliefs, I would favour calm, respectful responses that distinguish what is known from what is assumed, rather than elaborate on unsupported explanations. The goal is to support a person's ability to assess claims, not make the assistant the sole source of certainty.
+
+There is also a tension between accuracy on a fixed benchmark and honesty about uncertainty. This homework requires PASS or FAIL, but a real research system should be able to say that available evidence is insufficient and identify what further information would help. My main takeaway is that a helpful agent needs both a useful task workflow and boundaries on its claims. It should make evidence easier to inspect and remain willing to disagree respectfully, including when agreement would be more pleasing.

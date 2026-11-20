@@ -57,7 +57,7 @@ def load_env_file(path: Path = Path(".env")) -> None:
 
 # Choose any 3 of the 15 points, e.g. CHOSEN_POINTS = [1, 7, 15]. Your agent
 # gives a PASS or FAIL verdict on these 3 points only, with your own rule for each.
-CHOSEN_POINTS: list[int] = []  ### YOUR CODE HERE
+CHOSEN_POINTS: list[int] = [4, 7, 11]  ### YOUR CODE HERE
 
 
 def build_agent() -> Any:
@@ -72,7 +72,14 @@ def build_agent() -> Any:
     you will probably create one tool-calling agent per company there.
     """
     ### YOUR CODE HERE
-    return None
+    from langchain_deepseek import ChatDeepSeek
+
+    model = ChatDeepSeek(
+        model=MODEL_NAME,
+        temperature=0
+    )
+
+    return model
 
 
 async def analyze_companies(agent: Any, companies: dict[str, list[Any]]) -> dict[str, dict[str, Any]]:
@@ -109,8 +116,91 @@ async def analyze_companies(agent: Any, companies: dict[str, list[Any]]) -> dict
     You may analyse companies in parallel (e.g. ``asyncio.gather``).
     """
     ### YOUR CODE HERE
-    _ = agent
-    return {name: {"points": {}, "summary": ""} for name in companies}
+    from langchain_core.messages import SystemMessage, HumanMessage
+
+    semaphore = asyncio.Semaphore(3)
+
+    system_prompt = """
+You evaluate three of Philip Fisher's investment criteria.
+Use only the supplied interview evidence.
+
+Point 4: PASS for an above-average sales organization with
+knowledgeable, effective and responsive sales staff.
+FAIL for weak sales capability or performance below competitors.
+
+Point 7: PASS for outstanding labour and personnel relations,
+supported by fair treatment, trust and positive working conditions.
+FAIL for poor treatment, serious dissatisfaction or unhealthy relations.
+
+Point 11: PASS for a meaningful, defensible industry-specific
+advantage over competitors. FAIL if the advantage is absent,
+easily copied or undermined by the evidence.
+
+Pay attention to negative statements. Do not invent facts.
+Return only a JSON object with this structure:
+{"points": {"4": "PASS", "7": "FAIL", "11": "PASS"},
+ "summary": "Two or three English sentences explaining the verdicts."}
+The verdicts shown above are format examples, not the answers.
+"""
+
+    async def analyze_one(name, tools):
+        async with semaphore:
+            try:
+                interview = tools[3]
+                evidence = {
+                    "4": interview.invoke({
+                        "role": "customer",
+                        "topic": "sales_team"
+                    }),
+                    "7": interview.invoke({
+                        "role": "current_employee",
+                        "topic": "working_conditions"
+                    }),
+                    "11": interview.invoke({
+                        "role": "competitor",
+                        "topic": "competitive_edge"
+                    })
+                }
+
+                response = await agent.ainvoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=(
+                        f"Company: {name}\nInterview evidence:\n"
+                        + json.dumps(evidence, ensure_ascii=False)
+                    ))
+                ])
+
+                text = str(response.content).strip()
+                start = text.find("{")
+                end = text.rfind("}") + 1
+                if start < 0 or end <= start:
+                    raise ValueError("No JSON object in model response")
+
+                data = json.loads(text[start:end])
+                points = {}
+                for point in CHOSEN_POINTS:
+                    verdict = str(data["points"][str(point)]).strip().upper()
+                    if verdict not in ("PASS", "FAIL"):
+                        raise ValueError(f"Invalid verdict for point {point}")
+                    points[point] = verdict
+
+                summary = data["summary"]
+                if not isinstance(summary, str) or not summary.strip():
+                    raise ValueError("Missing summary")
+
+                return name, {"points": points, "summary": summary}
+
+            except Exception as exc:
+                return name, {
+                    "points": {},
+                    "summary": f"Analysis error: {exc}"
+                }
+
+    results = await asyncio.gather(*(
+        analyze_one(name, tools)
+        for name, tools in companies.items()
+    ))
+    return dict(results)
 
 
 # Everything below is provided runner/scoring code. No edits are needed.
